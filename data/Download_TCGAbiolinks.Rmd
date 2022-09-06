@@ -1,0 +1,84 @@
+---
+title: "Download_TCGAbiolinks"
+author: "N. Alcala"
+date: "9/6/2022"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+
+# R Code to download expression data from TCGA with TCGAbiolinks
+
+## Install TCGAbiolink
+Note that due to a bug in  GDCprepare for RNAseq, it is for now necessary to install the package with these links:
+```{r install, message=FALSE, eval=FALSE}
+BiocManager::install("BioinformaticsFMRP/TCGAbiolinks")
+BiocManager::install("BioinformaticsFMRP/TCGAbiolinksGUI.data")
+```
+
+## load libraries 
+```{r libraries, message=FALSE}
+library(TCGAbiolinksGUI.data)
+library(TCGAbiolinks)
+library(dplyr)
+library(DT)
+library(SummarizedExperiment)
+```
+
+## Getting the data ready
+### Query platform Illumina HiSeq with a list of barcode 
+We first build queries, for example for the malignant pleural mesothelioma (MESO) cohort and the breast cancer cohort (BRCA)
+```{r queries, message=FALSE}
+query <- GDCquery(
+  project = "TCGA-MESO", 
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+
+query.BRCA <- GDCquery(
+  project = "TCGA-BRCA", 
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+```
+
+We then download the queries
+```{r download, message=FALSE, eval=FALSE}
+GDCdownload(query,directory = "data/")
+GDCdownload(query.BRCA,directory = "data/")
+```
+
+### Prepare expression matrix 
+Matrices contain geneID in the rows and samples (barcode) in the columns, and rsem.genes.results as values
+```{r prepare, message=FALSE, eval=FALSE}
+MESO.Rnaseq.SE <- GDCprepare(query,save = TRUE,directory = "data/")
+BRCA.Rnaseq.SE <- GDCprepare(query.BRCA,save = TRUE,directory = "data/")
+```
+
+### alternatively, if already prepared and saved, load from disk
+```{r load, message=FALSE}
+load("data/TCGA-MESOTranscriptome_ProfilingFri_Jul_29_11:39:27_2022.RData")
+MESO.Rnaseq.SE = data
+load("data/TCGA-BRCATranscriptome_ProfilingFri_Jul_29_12:11:29_2022.RData")
+BRCA.Rnaseq.SE = data
+```
+
+### Get expression in TPM
+```{r tpm, message=FALSE}
+MESO.Rnaseq.expr.tpm = assay(MESO.Rnaseq.SE,"tpm_unstrand")
+BRCA.Rnaseq.expr.tpm = assay(BRCA.Rnaseq.SE,"tpm_unstrand")
+```
+
+### Access clinical data
+```{r clinical, message=FALSE}
+colData(MESO.Rnaseq.SE)
+colData(BRCA.Rnaseq.SE)
+```
+
+## Session Info 
+```{r info}
+sessionInfo()
+```
