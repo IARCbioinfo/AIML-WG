@@ -1,7 +1,7 @@
 ---
 title: "Download_TCGAbiolinks"
 author: "N. Alcala"
-date: "9/6/2022"
+date: "5/6/2023"
 output: 
   html_document: 
     keep_md: yes
@@ -30,32 +30,27 @@ library(SummarizedExperiment)
 ### Query platform Illumina HiSeq with a list of barcode 
 We first build queries, for example for the malignant pleural mesothelioma (MESO) cohort and the breast cancer cohort (BRCA)
 ```{r queries, message=FALSE}
-query <- GDCquery(
-  project = "TCGA-MESO", 
-  data.category = "Transcriptome Profiling",
-  data.type = "Gene Expression Quantification",
-  workflow.type = "STAR - Counts"
-)
+TCGA_projects = c("TCGA-ACC","TCGA-BLCA","TCGA-BRCA","TCGA-CESC","TCGA-CHOL","TCGA-COAD","TCGA-DLBC","TCGA-ESCA","TCGA-GBM","TCGA-HNSC","TCGA-KICH",
+                  "TCGA-KIRC","TCGA-KIRP","TCGA-LAML","TCGA-LGG","TCGA-LIHC","TCGA-LUAD","TCGA-LUSC","TCGA-MESO","TCGA-OV","TCGA-PAAD","TCGA-PCPG",
+                  "TCGA-PRAD","TCGA-READ","TCGA-SARC","TCGA-SKCM","TCGA-STAD","TCGA-TGCT","TCGA-THCA","TCGA-THYM","TCGA-UCEC","TCGA-UCS","TCGA-UVM")
 
-query.BRCA <- GDCquery(
-  project = "TCGA-BRCA", 
+queryl <- lapply(TCGA_projects, function(x) GDCquery(
+  project = x, 
   data.category = "Transcriptome Profiling",
   data.type = "Gene Expression Quantification",
   workflow.type = "STAR - Counts"
-)
+) )
 ```
 
 We then download the queries
 ```{r download, message=FALSE, eval=FALSE}
-GDCdownload(query,directory = "data/")
-GDCdownload(query.BRCA,directory = "data/")
+for(x in queryl) GDCdownload(x,directory = "/data/AIML/work/alcalan/GDCdata/")
 ```
 
 ### Prepare expression matrix 
 Matrices contain geneID in the rows and samples (barcode) in the columns, and rsem.genes.results as values
 ```{r prepare, message=FALSE, eval=FALSE}
-MESO.Rnaseq.SE <- GDCprepare(query,save = TRUE,directory = "data/")
-BRCA.Rnaseq.SE <- GDCprepare(query.BRCA,save = TRUE,directory = "data/")
+for(x in queryl) GDCprepare(x,save = TRUE,directory = "/data/AIML/work/alcalan/GDCdata/")
 ```
 
 ### alternatively, if already prepared and saved, load from disk
