@@ -20,24 +20,46 @@ library(ade4)
 library(keras)
 library(cluster)
 library(readxl)
+library(fpc)
+library(clusterSim)
+library(Rtsne)
 ```
 
 ## Load expression data from TCGA
 ```{r load, message=FALSE}
-load("AIML-WG/data/TCGA-MESOTranscriptome_ProfilingFri_Jul_29_11:39:27_2022.RData")
+# Glioma with GBM and LGG
+load("/data/AIML/work/Shared/TCGA-expression/TCGA-GBMTranscriptome_ProfilingMon_Dec__4_11:47:48_2023.RData")
+GBM.Rnaseq.SE = data
+load("/data/AIML/work/Shared/TCGA-expression/TCGA-LGGTranscriptome_ProfilingMon_Dec__4_12:09:47_2023.RData")
+LGG.Rnaseq.SE = data
+# Mesothelioma
+load("/data/AIML/work/Shared/TCGA-expression/TCGA-MESOTranscriptome_ProfilingMon_Dec__4_12:26:30_2023.RData")
 MESO.Rnaseq.SE = data
+# Breast cancer
+load("/data/AIML/work/Shared/TCGA-expression/TCGA-BRCATranscriptome_ProfilingMon_Dec__4_11:33:56_2023.RData")
+BRCA.Rnaseq.SE = data
+
+rm(data)
+gc()
+
 # clean histology
 MESO.Rnaseq.SE$primary_diagnosis[MESO.Rnaseq.SE$primary_diagnosis=="Epithelioid mesothelioma, malignant"] = "MME"
 MESO.Rnaseq.SE$primary_diagnosis[MESO.Rnaseq.SE$primary_diagnosis=="Mesothelioma, biphasic, malignant"] = "MMB"
 MESO.Rnaseq.SE$primary_diagnosis[MESO.Rnaseq.SE$primary_diagnosis%in%c("Mesothelioma, malignant","Fibrous mesothelioma, malignant")] = NA
 table(MESO.Rnaseq.SE$primary_diagnosis)
 
-load("AIML-WG/data/TCGA-BRCATranscriptome_ProfilingFri_Jul_29_12:11:29_2022.RData")
-BRCA.Rnaseq.SE = data
+# merge GBM and LGG datasets
+commoncols = colnames(colData(GBM.Rnaseq.SE) )[colnames(colData(GBM.Rnaseq.SE))%in%colnames(colData(LGG.Rnaseq.SE))]
+
+colData(GBM.Rnaseq.SE) = colData(GBM.Rnaseq.SE)[,commoncols]
+colData(LGG.Rnaseq.SE) = colData(LGG.Rnaseq.SE)[,commoncols] 
+
+glioma.Rnaseq.SE = cbind(GBM.Rnaseq.SE,LGG.Rnaseq.SE)
 ```
+
 ### load additional clinical data from TCGA papers
 ```{r }
-MESO_S1 = read_xlsx("AIML-WG/data/TCGA_TableS1.xlsx",sheet=2)
+MESO_S1 = read_xlsx("~/AIML/AIML-WG/data/TCGA_TableS1.xlsx",sheet=2)
 # match barcodes 
 MESO_S1$barcode = MESO.Rnaseq.SE$barcode[sapply(MESO_S1$TCGA_barcode, function(x) grep(x = MESO.Rnaseq.SE$barcode,pattern = x) )]
 MESOorder = sapply(MESO.Rnaseq.SE$barcode,function(x){res=which(MESO_S1$barcode==x);if(length(res)==0){res=NA};return(res)})
@@ -48,6 +70,10 @@ MESO_S1 = MESO_S1[MESOorder[!is.na(MESOorder)],]
 
 ### make survival groups
 ```{r }
+## glioma
+glioma.Rnaseq.SE$survival_group = cut(glioma.Rnaseq.SE$days_to_death,breaks = quantile(glioma.Rnaseq.SE$days_to_death,c(0,0.33,0.67,1),na.rm=T))
+glioma.Rnaseq.SE$survival_group[which(as.numeric(glioma.Rnaseq.SE$survival_group)<3 & glioma.Rnaseq.SE$vital_status=="Alive")] = NA
+
 ## MESO
 MESO.Rnaseq.SE$survival_group = cut(MESO.Rnaseq.SE$days_to_death,breaks = quantile(MESO.Rnaseq.SE$days_to_death,c(0,0.33,0.67,1),na.rm=T))
 MESO.Rnaseq.SE$survival_group[which(as.numeric(MESO.Rnaseq.SE$survival_group)<3 & MESO.Rnaseq.SE$vital_status=="Alive")] = NA
@@ -63,9 +89,11 @@ BRCA.Rnaseq.SE$survival_group[which(as.numeric(BRCA.Rnaseq.SE$survival_group)<3 
 ```{r tpm, message=FALSE}
 MESO.Rnaseq.expr.tpm = assay(MESO.Rnaseq.SE,"tpm_unstrand")
 BRCA.Rnaseq.expr.tpm = assay(BRCA.Rnaseq.SE,"tpm_unstrand")
+glioma.Rnaseq.expr.tpm = assay(glioma.Rnaseq.SE,"tpm_unstrand")
 
-MESO.Rnaseq.expr.tpm.logmat = t(log(MESO.Rnaseq.expr.tpm[order(apply(MESO.Rnaseq.expr.tpm,1,var),decreasing = T)[1:5000],]+1))
-BRCA.Rnaseq.expr.tpm.logmat = t(log(BRCA.Rnaseq.expr.tpm[order(apply(BRCA.Rnaseq.expr.tpm,1,var),decreasing = T)[1:5000],]+1))
+MESO.Rnaseq.expr.tpm.logmat   = t(log(MESO.Rnaseq.expr.tpm[order(apply(MESO.Rnaseq.expr.tpm,1,var),decreasing = T)[1:5000],]+1))
+BRCA.Rnaseq.expr.tpm.logmat   = t(log(BRCA.Rnaseq.expr.tpm[order(apply(BRCA.Rnaseq.expr.tpm,1,var),decreasing = T)[1:5000],]+1))
+glioma.Rnaseq.expr.tpm.logmat = t(log(glioma.Rnaseq.expr.tpm[order(apply(glioma.Rnaseq.expr.tpm,1,var),decreasing = T)[1:5000],]+1))
 ```
 
 ## Analysis
@@ -73,14 +101,23 @@ Note: use bootstrapping to get CIs.
 
 ### PCA of log(tpm+1) expression of 5000 most variable genes
 ```{r pca, message=FALSE}
-pca.MESO = dudi.pca(MESO.Rnaseq.expr.tpm.logmat,scannf = F,nf=10)
-pca.BRCA = dudi.pca(BRCA.Rnaseq.expr.tpm.logmat,scannf = F,nf=10)
+pca.MESO   = dudi.pca(MESO.Rnaseq.expr.tpm.logmat,scannf = F,nf=10)
+pca.BRCA   = dudi.pca(BRCA.Rnaseq.expr.tpm.logmat,scannf = F,nf=10)
+pca.glioma = dudi.pca(glioma.Rnaseq.expr.tpm.logmat,scannf = F,nf=10)
+```
+
+### t-SNE of log(tpm+1) expression of 5000 most variable genes
+```{r tsne, message=FALSE}
+tsne.MESO   = Rtsne(MESO.Rnaseq.expr.tpm.logmat,perplexity = 24) # had to reduce perplexity from 30 to 24 because too few samples
+tsne.BRCA   = Rtsne(BRCA.Rnaseq.expr.tpm.logmat)
+tsne.glioma = Rtsne(glioma.Rnaseq.expr.tpm.logmat)
 ```
 
 ### UMAP of log(tpm+1) expression of 5000 most variable genes
 ```{r umap, message=FALSE}
-umap.MESO = umap(MESO.Rnaseq.expr.tpm.logmat)
-umap.BRCA = umap(BRCA.Rnaseq.expr.tpm.logmat)
+umap.MESO   = umap(MESO.Rnaseq.expr.tpm.logmat)
+umap.BRCA   = umap(BRCA.Rnaseq.expr.tpm.logmat)
+umap.glioma = umap(glioma.Rnaseq.expr.tpm.logmat)
 ```
 Note: play with parameters.
 
@@ -89,6 +126,7 @@ Note: play with parameters.
 # set models
 modelMESO <- keras_model_sequential()
 modelBRCA <- keras_model_sequential()
+modelglioma <- keras_model_sequential()
 modelMESO %>%
   layer_dense(units = 50, activation = "linear", input_shape = 5000) %>%
   layer_dense(units = 2, activation = "linear", name = "bottleneck") %>%
@@ -99,34 +137,43 @@ modelBRCA %>%
   layer_dense(units = 2, activation = "linear", name = "bottleneck") %>%
   layer_dense(units = 50, activation = "linear") %>%
   layer_dense(units = 5000)
+modelglioma %>%
+  layer_dense(units = 50, activation = "linear", input_shape = 5000) %>%
+  layer_dense(units = 2, activation = "linear", name = "bottleneck") %>%
+  layer_dense(units = 50, activation = "linear") %>%
+  layer_dense(units = 5000)
 # view model layers
 summary(modelMESO)
 
 # compile model
 modelMESO %>% compile(loss = "mean_squared_error", optimizer = "rmsprop")
 modelBRCA %>% compile(loss = "mean_squared_error", optimizer = "rmsprop")
+modelglioma %>% compile(loss = "mean_squared_error", optimizer = "rmsprop")
 
 # fit model
 modelMESO %>% fit(x = MESO.Rnaseq.expr.tpm.logmat, y = MESO.Rnaseq.expr.tpm.logmat, epochs = 200,verbose = 1)
 modelBRCA %>% fit(x = BRCA.Rnaseq.expr.tpm.logmat, y = BRCA.Rnaseq.expr.tpm.logmat, epochs = 200,verbose = 1)
+modelglioma %>% fit(x = glioma.Rnaseq.expr.tpm.logmat, y = glioma.Rnaseq.expr.tpm.logmat, epochs = 200,verbose = 1)
 
 # evaluate the performance of the model
-mse.aeMESO <- evaluate(modelMESO, MESO.Rnaseq.expr.tpm.logmat, MESO.Rnaseq.expr.tpm.logmat)
-mse.aeBRCA <- evaluate(modelBRCA, BRCA.Rnaseq.expr.tpm.logmat, BRCA.Rnaseq.expr.tpm.logmat)
-mse.aeMESO
-mse.aeBRCA
+mse.aeMESO   <- evaluate(modelMESO, MESO.Rnaseq.expr.tpm.logmat, MESO.Rnaseq.expr.tpm.logmat)
+mse.aeBRCA   <- evaluate(modelBRCA, BRCA.Rnaseq.expr.tpm.logmat, BRCA.Rnaseq.expr.tpm.logmat)
+mse.aeglioma <- evaluate(modelglioma, glioma.Rnaseq.expr.tpm.logmat, glioma.Rnaseq.expr.tpm.logmat)
 
-intermediate_layer_modelMESO <- keras_model(inputs = modelMESO$input, outputs = get_layer(modelMESO, "bottleneck")$output)
-intermediate_layer_modelBRCA <- keras_model(inputs = modelBRCA$input, outputs = get_layer(modelBRCA, "bottleneck")$output)
-AE.MESO <- predict(intermediate_layer_modelMESO, MESO.Rnaseq.expr.tpm.logmat)
-AE.BRCA <- predict(intermediate_layer_modelBRCA, BRCA.Rnaseq.expr.tpm.logmat)
+intermediate_layer_modelMESO   <- keras_model(inputs = modelMESO$input, outputs = get_layer(modelMESO, "bottleneck")$output)
+intermediate_layer_modelBRCA   <- keras_model(inputs = modelBRCA$input, outputs = get_layer(modelBRCA, "bottleneck")$output)
+intermediate_layer_modelglioma <- keras_model(inputs = modelglioma$input, outputs = get_layer(modelglioma, "bottleneck")$output)
+AE.MESO   <- predict(intermediate_layer_modelMESO, MESO.Rnaseq.expr.tpm.logmat)
+AE.BRCA   <- predict(intermediate_layer_modelBRCA, BRCA.Rnaseq.expr.tpm.logmat)
+AE.glioma <- predict(intermediate_layer_modelglioma, glioma.Rnaseq.expr.tpm.logmat)
 ```
 
-### plot
+### plots
 We create tibble objects for plotting
 ```{r tibbles, message=FALSE}
-embeddings.MESO.tib = tibble(PCA=pca.MESO$li, UMAP = umap.MESO$layout, AE= AE.MESO, data=as.data.frame(colData(MESO.Rnaseq.SE) ) )
-embeddings.BRCA.tib = tibble(PCA=pca.BRCA$li, UMAP = umap.BRCA$layout, AE=AE.BRCA, data=as.data.frame(colData(BRCA.Rnaseq.SE) ) )
+embeddings.MESO.tib  = tibble(PCA=pca.MESO$li, tSNE = tsne.MESO$Y, UMAP = umap.MESO$layout, AE= AE.MESO, data=as.data.frame(colData(MESO.Rnaseq.SE) ) )
+embeddings.BRCA.tib  = tibble(PCA=pca.BRCA$li, tSNE = tsne.BRCA$Y, UMAP = umap.BRCA$layout, AE=AE.BRCA, data=as.data.frame(colData(BRCA.Rnaseq.SE) ) )
+embeddings.glioma.tib = tibble(PCA=pca.glioma$li, tSNE = tsne.glioma$Y, UMAP = umap.glioma$layout, AE=AE.glioma, data=as.data.frame(colData(glioma.Rnaseq.SE) ) )
 ```
 
 #### Histopathology
@@ -134,23 +181,35 @@ Plot first 2 PCA axes. For MESO, we use the histopathological types as colors; f
 ```{r pcaplot, message=FALSE}
 ggMESO_PCA  = ggplot(embeddings.MESO.tib, aes(x=PCA$Axis1,y=PCA$Axis2 ,col=MESO.Rnaseq.SE$primary_diagnosis)) + geom_point() + theme_bw() + xlab("PC1") + ylab("PC2")
 ggBRCA_PCA  = ggplot(embeddings.BRCA.tib, aes(x=PCA$Axis1,y=PCA$Axis2 ,col=BRCA.Rnaseq.SE$paper_BRCA_Pathology)) + geom_point() + theme_bw() + xlab("PC1") + ylab("PC2")
+ggglioma_PCA  = ggplot(embeddings.glioma.tib, aes(x=PCA$Axis1,y=PCA$Axis2 ,col=glioma.Rnaseq.SE$paper_Histology)) + geom_point() + theme_bw() + xlab("PC1") + ylab("PC2")
+```
+
+We plot the t-SNE results
+```{r tsneplot, message=FALSE}
+ggMESO_tsne = ggplot(embeddings.MESO.tib, aes(x=tSNE[,1],y=tSNE[,2] ,col=MESO.Rnaseq.SE$primary_diagnosis)) + geom_point() + theme_bw() + xlab("tsne1") + ylab("tsne2")
+ggBRCA_tsne = ggplot(embeddings.BRCA.tib, aes(x=tSNE[,1],y=tSNE[,2] ,col=BRCA.Rnaseq.SE$paper_BRCA_Pathology)) + geom_point() + theme_bw() + xlab("tsne1") + ylab("tsne2")
+ggglioma_tsne = ggplot(embeddings.glioma.tib, aes(x=tSNE[,1],y=tSNE[,2] ,col=glioma.Rnaseq.SE$paper_Histology)) + geom_point() + theme_bw() + xlab("tsne1") + ylab("tsne2")
 ```
 
 We plot the UMAP
 ```{r umapplot, message=FALSE}
 ggMESO_UMAP = ggplot(embeddings.MESO.tib, aes(x=UMAP[,1],y=UMAP[,2] ,col=MESO.Rnaseq.SE$primary_diagnosis)) + geom_point() + theme_bw() + xlab("UMAP1") + ylab("UMAP2")
 ggBRCA_UMAP = ggplot(embeddings.BRCA.tib, aes(x=UMAP[,1],y=UMAP[,2] ,col=BRCA.Rnaseq.SE$paper_BRCA_Pathology)) + geom_point() + theme_bw() + xlab("UMAP1") + ylab("UMAP2")
+ggglioma_UMAP = ggplot(embeddings.glioma.tib, aes(x=UMAP[,1],y=UMAP[,2] ,col=glioma.Rnaseq.SE$paper_Histology)) + geom_point() + theme_bw() + xlab("UMAP1") + ylab("UMAP2")
 ```
 
 We plot the autoencoders
 ```{r aeplot, message=FALSE}
 ggMESO_AE = ggplot(embeddings.MESO.tib, aes(x=AE[,1],y=AE[,2] ,col=MESO.Rnaseq.SE$primary_diagnosis)) + geom_point() + theme_bw() + xlab("AE1") + ylab("AE2")
 ggBRCA_AE = ggplot(embeddings.BRCA.tib, aes(x=AE[,1],y=AE[,2] ,col=BRCA.Rnaseq.SE$paper_BRCA_Pathology)) + geom_point() + theme_bw() + xlab("AE1") + ylab("AE2")
+ggglioma_AE = ggplot(embeddings.glioma.tib, aes(x=AE[,1],y=AE[,2] ,col=glioma.Rnaseq.SE$paper_Histology)) + geom_point() + theme_bw() + xlab("AE1") + ylab("AE2")
 ```
 
 We arrange the plots with patchwork
 ```{r allplots, message=FALSE}
-((ggMESO_PCA+guides(color="none"))+ ggMESO_UMAP+guides(color="none")+ (ggMESO_AE + guides(col=guide_legend(title="Histology"))) )/((ggBRCA_PCA+guides(color="none"))+ ggBRCA_UMAP+guides(color="none")+ (ggBRCA_AE + guides(col=guide_legend(title="Histology"))) )
+((ggMESO_PCA+guides(color="none"))+ ggMESO_tsne+guides(color="none")+ ggMESO_UMAP+guides(color="none")+ (ggMESO_AE + guides(col=guide_legend(title="Histology"))) )/
+  ((ggBRCA_PCA+guides(color="none"))+ ggBRCA_tsne+guides(color="none")+ggBRCA_UMAP+guides(color="none")+ (ggBRCA_AE + guides(col=guide_legend(title="Histology"))) )/
+  ((ggglioma_PCA+guides(color="none"))+ ggglioma_tsne+guides(color="none")+ggglioma_UMAP+guides(color="none")+ (ggglioma_AE + guides(col=guide_legend(title="Histology"))) )
 ```
 
 #### Molecular groups
@@ -200,73 +259,71 @@ We arrange the plots with patchwork
 ```
 
 ## Compute metrics
+We first create a function to compute the metrics for a given embedding and clustering
+```{r}
+compute_clust_metrics = function(data,groups){
+  data_red = data[!is.na(groups),]
+  groups_red = as.numeric(as.factor(groups[!is.na(groups)]))
+  #1. 
+  cal = calinhara(data_red,groups_red)
+  #2. DBI: Davies-Bouldin Index
+  db_s = index.DB(data_red, groups_red)$DB
+  #3. Silhouette score based on euclidean matric
+  ss_euc = mean(cluster.stats(dist(data_red,method = "euclidean") , groups_red)$clus.avg.silwidths)
+  return(c(cal,db_s,ss_euc))
+}
+```
+
 ### For histopathological types
 ```{r sil, message=FALSE}
 ## MESO
-silMESO.PCA  = silhouette(as.numeric(as.factor(MESO.Rnaseq.SE$primary_diagnosis))[!is.na(MESO.Rnaseq.SE$primary_diagnosis)],
-           dist = dist(embeddings.MESO.tib$PCA[!is.na(MESO.Rnaseq.SE$primary_diagnosis),]))
-silMESO.UMAP = silhouette(as.numeric(as.factor(MESO.Rnaseq.SE$primary_diagnosis))[!is.na(MESO.Rnaseq.SE$primary_diagnosis)],
-           dist = dist(embeddings.MESO.tib$UMAP[!is.na(MESO.Rnaseq.SE$primary_diagnosis),]))
-silMESO.AE   = silhouette(as.numeric(as.factor(MESO.Rnaseq.SE$primary_diagnosis))[!is.na(MESO.Rnaseq.SE$primary_diagnosis)],
-           dist = dist(embeddings.MESO.tib$AE[!is.na(MESO.Rnaseq.SE$primary_diagnosis),]))
+statsMESO   = sapply(embeddings.MESO.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],MESO.Rnaseq.SE$primary_diagnosis) )
 ## BRCA
-silBRCA.PCA  = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$paper_BRCA_Pathology))[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Pathology)],
-           dist = dist(embeddings.BRCA.tib$PCA[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Pathology),]))
-silBRCA.UMAP = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$paper_BRCA_Pathology))[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Pathology)],
-           dist = dist(embeddings.BRCA.tib$UMAP[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Pathology),]))
-silBRCA.AE   = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$paper_BRCA_Pathology))[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Pathology)],
-           dist = dist(embeddings.BRCA.tib$AE[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Pathology),]))
+statsBRCA   = sapply(embeddings.BRCA.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],BRCA.Rnaseq.SE$primary_diagnosis) )
+## glioma
+statsglioma = sapply(embeddings.glioma.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],glioma.Rnaseq.SE$primary_diagnosis) )
 ```
 
 ### For molecular groups
 ```{r silmol, message=FALSE}
 ## MESO
-silMESO.PCA.mol  = silhouette(as.numeric(as.factor(MESO_S1$iCluster_k4.5types)), dist = dist(embeddings.MESO.tib$PCA))
-silMESO.UMAP.mol = silhouette(as.numeric(as.factor(MESO_S1$iCluster_k4.5types)), dist = dist(embeddings.MESO.tib$UMAP))
-silMESO.AE.mol   = silhouette(as.numeric(as.factor(MESO_S1$iCluster_k4.5types)), dist = dist(embeddings.MESO.tib$AE))
+statsMESO.mol   = sapply(embeddings.MESO.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],MESO_S1$iCluster_k4.5types) )
 ## BRCA
-silBRCA.PCA.mol  = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50))[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50)],
-           dist = dist(embeddings.BRCA.tib$PCA[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50),]))
-silBRCA.UMAP.mol = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50))[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50)],
-           dist = dist(embeddings.BRCA.tib$UMAP[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50),]))
-silBRCA.AE.mol   = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50))[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50)],
-           dist = dist(embeddings.BRCA.tib$AE[!is.na(BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50),]))
+statsBRCA.mol   = sapply(embeddings.BRCA.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],BRCA.Rnaseq.SE$paper_BRCA_Subtype_PAM50) )
+## glioma
+statsglioma.mol = sapply(embeddings.glioma.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],glioma.Rnaseq.SE$paper_IDH.codel.subtype) )
 ```
 
 ### For clinical variables
 ```{r silclin, message=FALSE}
 ## MESO
-silMESO.PCA.clin  = silhouette(as.numeric(MESO.Rnaseq.SE$survival_group)[!is.na(MESO.Rnaseq.SE$survival_group)], dist = dist(embeddings.MESO.tib$PCA[!is.na(MESO.Rnaseq.SE$survival_group),]))
-silMESO.UMAP.clin = silhouette(as.numeric(MESO.Rnaseq.SE$survival_group)[!is.na(MESO.Rnaseq.SE$survival_group)], dist = dist(embeddings.MESO.tib$UMAP[!is.na(MESO.Rnaseq.SE$survival_group),]))
-silMESO.AE.clin   = silhouette(as.numeric(MESO.Rnaseq.SE$survival_group)[!is.na(MESO.Rnaseq.SE$survival_group)], dist = dist(embeddings.MESO.tib$AE[!is.na(MESO.Rnaseq.SE$survival_group),]))
-
+statsMESO.clin  = sapply(embeddings.MESO.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],MESO.Rnaseq.SE$survival_group) )
 ## BRCA
-silBRCA.PCA.clin  = silhouette(as.numeric(BRCA.Rnaseq.SE$survival_group)[!is.na(BRCA.Rnaseq.SE$survival_group)],
-           dist = dist(embeddings.BRCA.tib$PCA[!is.na(BRCA.Rnaseq.SE$survival_group),]))
-silBRCA.UMAP.clin = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$survival_group))[!is.na(BRCA.Rnaseq.SE$survival_group)],
-           dist = dist(embeddings.BRCA.tib$UMAP[!is.na(BRCA.Rnaseq.SE$survival_group),]))
-silBRCA.AE.clin   = silhouette(as.numeric(as.factor(BRCA.Rnaseq.SE$survival_group))[!is.na(BRCA.Rnaseq.SE$survival_group)],
-           dist = dist(embeddings.BRCA.tib$AE[!is.na(BRCA.Rnaseq.SE$survival_group),]))
+statsBRCA.clin  = sapply(embeddings.BRCA.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],BRCA.Rnaseq.SE$survival_group) )
+## glioma
+statsglioma.clin = sapply(embeddings.glioma.tib[1:4], function(emb) compute_clust_metrics(emb[,1:2],glioma.Rnaseq.SE$survival_group))
 ```
-
 
 ### Plot metrics
 ```{r silplot, message=FALSE}
-sill = tibble(embedding=rep(c("PCA","UMAP","AE"),2*3),variable=rep(c("Histological types","Molecular groups","Survival groups"),each=3*2), 
-              Cohort = rep(rep(c("MESO","BRCA"),each=3),3),
-              silhouette=c(mean(silMESO.PCA[,3]),mean(silMESO.UMAP[,3]),mean(silMESO.AE[,3]),
-                           mean(silBRCA.PCA[,3]),mean(silBRCA.UMAP[,3]),mean(silBRCA.AE[,3]),
-                           mean(silMESO.PCA.mol[,3]),mean(silMESO.UMAP.mol[,3]),mean(silMESO.AE.mol[,3]),
-                           mean(silBRCA.PCA.mol[,3]),mean(silBRCA.UMAP.mol[,3]),mean(silBRCA.AE.mol[,3]),
-                           mean(silMESO.PCA.clin[,3]),mean(silMESO.UMAP.clin[,3]),mean(silMESO.AE.clin[,3]),
-                           mean(silBRCA.PCA.clin[,3]),mean(silBRCA.UMAP.clin[,3]),mean(silBRCA.AE.clin[,3])
-                           ))
+stats.tib = bind_rows(bind_cols(Type="MESO", Variable="Histopathology" , stat=c("CHI","DBI","Sil") , as_tibble(statsMESO)),
+                      bind_cols(Type="BRCA", Variable="Histopathology", stat=c("CHI","DBI","Sil") , as_tibble(statsBRCA)),
+                      bind_cols(Type="glioma", Variable="Histopathology", stat=c("CHI","DBI","Sil") , as_tibble(statsglioma)),
+                      bind_cols(Type="MESO", Variable="Molecular_groups" , stat=c("CHI","DBI","Sil") , as_tibble(statsMESO.mol)),
+                      bind_cols(Type="BRCA", Variable="Molecular_groups", stat=c("CHI","DBI","Sil") , as_tibble(statsBRCA.mol)),
+                      bind_cols(Type="glioma", Variable="Molecular_groups", stat=c("CHI","DBI","Sil") , as_tibble(statsglioma.mol)),
+                      bind_cols(Type="MESO", Variable="Survival_groups" , stat=c("CHI","DBI","Sil") , as_tibble(statsMESO.clin)),
+                      bind_cols(Type="BRCA", Variable="Survival_groups", stat=c("CHI","DBI","Sil") , as_tibble(statsBRCA.clin)),
+                      bind_cols(Type="glioma", Variable="Survival_groups", stat=c("CHI","DBI","Sil") , as_tibble(statsglioma.clin))
+)
 
-ggplot(sill, aes(x=embedding,y=silhouette,fill=Cohort) ) + geom_bar(stat="identity",beside=T,position=position_dodge()) + 
-  theme_bw() +ylab("Mean silhouette width") + facet_grid(.~variable)
+stats.tib.long = stats.tib %>% pivot_longer(PCA:AE,names_to = "Method")
+
+ggplot(stats.tib.long, aes(x=Type,y=value,fill=Method) ) + geom_bar(stat="identity",beside=T,position=position_dodge()) + 
+  theme_bw() +ylab("Statistic value") + facet_grid(stat~Variable,scales = "free_y")
 ```
+Higher CHI values are better. Lower BDI values are better. Larger silhouette values are better.
 
-Note: implement other metrics and find a way to summarize it.
 
 ## Session Info 
 ```{r info}
